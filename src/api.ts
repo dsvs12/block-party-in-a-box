@@ -21,12 +21,29 @@ export type RequestInput = {
   services: { barricades: boolean; green_kit: boolean };
 };
 
+/**
+ * Mocked sign-in for the demo: the API's dev auth accepts these fixed tokens (see api/README.md).
+ * The role comes from the endpoint being called. Replace with the real identity service later.
+ */
+const env = import.meta.env;
+const mockTokens = {
+  resident: (env.VITE_DEV_TOKEN_RESIDENT as string | undefined) ?? 'dev-resident-a',
+  vendor: (env.VITE_DEV_TOKEN_VENDOR as string | undefined) ?? 'dev-vendor-icecream',
+  village: (env.VITE_DEV_TOKEN_VILLAGE as string | undefined) ?? 'dev-reviewer'
+};
+function mockTokenFor(path: string) {
+  if (path.startsWith('/vendor')) return mockTokens.vendor;
+  if (path.startsWith('/village') || path.startsWith('/ai/')) return mockTokens.village;
+  return mockTokens.resident;
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!apiBase) throw new Error('API is not configured');
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
+      Authorization: `Bearer ${mockTokenFor(path)}`,
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...(init?.headers ?? {})
     }
@@ -77,19 +94,19 @@ export const residentApi = {
   beginPetition: (requestId: string) => post<{ petition_url: string; petition_due: LocalDate }>(`/requests/${requestId}/petition`),
   signPetition: (token: string, input: { name: string; house_number: string; email?: string; consent: true; captcha: string }) => post<{ state: SignatureState; distinct_count: number; needed: number }>(`/petitions/${token}/signatures`, input),
   submitRequest: (requestId: string) => post<unknown>(`/requests/${requestId}/submit`),
-  myRequests: () => request<unknown>('/me/requests')
+  myRequests: () => request<{ requests?: unknown[] }>('/me/requests').then((d) => d.requests ?? [])
 };
 
 export const vendorApi = {
   me: () => request<unknown>('/vendor/me'),
   offer: () => request<unknown>('/vendor/offer'),
   summary: () => request<unknown>('/vendor/summary'),
-  matches: () => request<unknown>('/vendor/matches?state=proposed'),
-  jobs: () => request<unknown>('/vendor/jobs')
+  matches: () => request<{ matches?: unknown[] }>('/vendor/matches?state=proposed').then((d) => d.matches ?? []),
+  jobs: () => request<{ jobs?: Record<string, unknown>[] }>('/vendor/jobs').then((d) => (d.jobs ?? []).map((job) => ({ event_date: job.date, ...job })))
 };
 
 export const villageApi = {
-  requests: () => request<unknown>('/village/requests?sort=submitted_at'),
+  requests: () => request<{ items?: unknown[] }>('/village/requests?sort=submitted_at').then((d) => ({ ...d, requests: d.items ?? [] })),
   today: (date: LocalDate) => request<unknown>(`/village/day?date=${date}`),
   whatIf: (date: LocalDate, closures: string[], treatAsWeekday = false) => post<unknown>('/village/whatif', { date, closures, treat_as_weekday: treatAsWeekday })
 };

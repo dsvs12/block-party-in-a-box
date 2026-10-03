@@ -9,3 +9,4 @@ api/test.db
 api/.venv/
 api/.env
 !api/.env.example
+.playwright-mcp/
