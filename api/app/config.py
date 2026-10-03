@@ -25,7 +25,7 @@ class Settings:
     DATABASE_URL: str = field(default_factory=lambda: _env("DATABASE_URL", "postgresql+psycopg://party:party@localhost:5433/partyinabox"))
     CORS_ORIGINS: str = field(default_factory=lambda: _env(
         "CORS_ORIGINS",
-        "https://dsvs12.github.io,http://localhost:8000,http://127.0.0.1:8000"))
+        "https://dsvs12.github.io,http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173"))
     PUBLIC_SITE_URL: str = field(default_factory=lambda: _env(
         "PUBLIC_SITE_URL", "https://dsvs12.github.io/block-party-in-a-box/"))
     AUTH_MODE: str = field(default_factory=lambda: _env("AUTH_MODE", "dev"))
