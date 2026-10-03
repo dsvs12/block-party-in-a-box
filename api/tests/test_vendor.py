@@ -143,3 +143,45 @@ def test_withdraw(client):
     finally:
         db.close()
     assert client.get("/v1/vendor/jobs", headers=ICE).json()["jobs"] == []
+
+
+def test_accept_twice_and_service_filled(client):
+    from app.db import Match, Offer, Request, SessionLocal, User, VendorAccount
+    from app.services import now
+    db = SessionLocal()
+    try:
+        db.add(Request(id="r_dup", organizer_id="u_b", block_id="S HARVEY AVE|1100", kind="party",
+                       date_start="2027-06-12", date_end="2027-06-26", guests=40,
+                       services={"barricades": True, "green_kit": True}, status="approved",
+                       approved_date="2027-06-19", submitted_at=now(), rules_year=2026, version=1))
+        db.add(VendorAccount(id="va_ice2", business_name="Second Ice Cream", status="approved",
+                             contact_email="ice2@example.org", approved_at=now()))
+        db.flush()
+        db.add(User(id="u_ice2", role="vendor", email="ice2@example.org", display_name="Second Ice Cream",
+                    vendor_account_id="va_ice2", dev_token="dev-vendor-ice2"))
+        db.add(Offer(vendor_account_id="va_ice2", service="ice_cream", price_usd=200, max_guests=100,
+                     jobs_per_day=2, includes="Cones", days=["saturday"], zips=["60302", "60304"],
+                     active=True))
+        for mid, vid in (("m_dup_a", "va_icecream"), ("m_dup_b", "va_ice2")):
+            db.add(Match(id=mid, request_id="r_dup", vendor_account_id=vid, event_date="2027-06-19",
+                         state="proposed", why=[], price_snapshot=200, includes_snapshot="x",
+                         service_snapshot="ice_cream", created_at=now()))
+        db.commit()
+    finally:
+        db.close()
+    ICE2 = H("vendor-ice2")
+    first = client.post("/v1/vendor/matches/m_dup_a/accept", headers=ICE)
+    assert first.status_code == 200 and first.json()["state"] == "accepted"
+    again = client.post("/v1/vendor/matches/m_dup_a/accept", headers=ICE)
+    assert again.status_code == 409
+    # accepting voids the sibling; the normal answer for the other vendor is wrong_state
+    assert client.post("/v1/vendor/matches/m_dup_b/accept", headers=ICE2).json()["code"] == "wrong_state"
+    # a stale sibling that is still proposed (the race case) must hit the service_filled guard
+    db = SessionLocal()
+    try:
+        db.get(Match, "m_dup_b").state = "proposed"
+        db.commit()
+    finally:
+        db.close()
+    second = client.post("/v1/vendor/matches/m_dup_b/accept", headers=ICE2)
+    assert second.status_code == 409 and second.json()["code"] == "service_filled"

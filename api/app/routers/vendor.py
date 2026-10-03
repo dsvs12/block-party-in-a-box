@@ -88,6 +88,14 @@ def _still_fits(db: Session, m: Match, va: VendorAccount, req: Request) -> bool:
     return bool(hits)
 
 
+def _lock_for_decision(db: Session, va: VendorAccount, m: Match) -> Request | None:
+    """Row-lock the request and this vendor's matches for the date so concurrent accepts serialize."""
+    req = db.query(Request).filter(Request.id == m.request_id).with_for_update().one_or_none()
+    db.query(Match).filter(Match.vendor_account_id == va.id,
+                           Match.event_date == m.event_date).with_for_update().all()
+    return req
+
+
 def _decide(m: Match, state: str) -> None:
     m.state = state
     m.decided_at = services.now()
@@ -177,7 +185,11 @@ def accept_match(match_id: str, user: User = Depends(require_role("vendor")),
     if m.state != "proposed":
         raise ApiError(409, "wrong_state", "This match can't be accepted right now.",
                        [f"Match is {m.state}."])
-    req = db.get(Request, m.request_id)
+    req = _lock_for_decision(db, va, m)
+    db.refresh(m)
+    if m.state != "proposed":
+        raise ApiError(409, "wrong_state", "This match can't be accepted right now.",
+                       [f"Match is {m.state}."])
     if req is None or req.status != "approved" or req.approved_date != m.event_date:
         raise ApiError(409, "no_longer_fits", "This event has changed and no longer fits.")
     offer = db.get(Offer, va.id)
@@ -227,7 +239,11 @@ def undo_match(match_id: str, user: User = Depends(require_role("vendor")),
     if m.state not in ("declined", "accepted"):
         raise ApiError(409, "wrong_state", "There's nothing to undo on this match.",
                        [f"Match is {m.state}."])
-    req = db.get(Request, m.request_id)
+    req = _lock_for_decision(db, va, m)
+    db.refresh(m)
+    if m.state not in ("declined", "accepted"):
+        raise ApiError(409, "wrong_state", "There's nothing to undo on this match.",
+                       [f"Match is {m.state}."])
     if m.event_date <= today() or req is None or not _still_fits(db, m, va, req):
         raise ApiError(409, "no_longer_fits", "This match no longer fits, so it can't be reopened.")
     before = m.state

@@ -1,7 +1,7 @@
 """Pydantic models for the Village reviewer endpoints (docs/api/village.openapi.yaml)."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,35 +26,38 @@ class WhatIfIn(BaseModel):
     treat_as_weekday: bool = False
 
 
+Str200 = Annotated[str, Field(max_length=200)]
+
+
 class ReasonIn(BaseModel):
     pts: int
-    text: str
+    text: Str200
 
 
 class AiClosureIn(BaseModel):
-    label: str
+    label: Str200
     score: int = Field(ge=0, le=100)
     level: Literal["low", "medium", "high"]
-    reasons: list[ReasonIn]
+    reasons: Annotated[list[ReasonIn], Field(max_length=20)]
 
 
 class AiWeekendIn(BaseModel):
-    count: int
-    cap: int
+    count: int = Field(ge=0, le=1000)
+    cap: int = Field(ge=0, le=1000)
 
 
 class AiSuggestionIn(BaseModel):
-    text: str
+    text: Str200
 
 
 class AiExplainIn(BaseModel):
     question: str = Field(max_length=300)
-    date: str
+    date: Str200
     is_weekday: bool
-    closures: list[AiClosureIn]
+    closures: Annotated[list[AiClosureIn], Field(max_length=50)]
     weekend: AiWeekendIn | None = None
-    suggestions: list[AiSuggestionIn]
-    tips: list[str]
+    suggestions: Annotated[list[AiSuggestionIn], Field(max_length=20)]
+    tips: Annotated[list[Str200], Field(max_length=20)]
 
 
 class AiExplainOut(BaseModel):
