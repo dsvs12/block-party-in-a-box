@@ -18,7 +18,7 @@ from .config import settings
 log = logging.getLogger("app.ai")
 
 API_URL = "https://api.anthropic.com/v1/messages"
-TIMEOUT_S = 8.0
+TIMEOUT_S = 15.0  # Sonnet answers in ~5 s; fall back to the template after this
 LABEL_AI = "AI-written"
 LABEL_TEMPLATE = "Templated summary (AI unavailable)"
 
@@ -78,11 +78,16 @@ def call_model(system: str, user_json: str) -> str:
         API_URL,
         headers={"x-api-key": settings.ANTHROPIC_API_KEY or "", "anthropic-version": "2023-06-01",
                  "content-type": "application/json"},
-        json={"model": settings.ANTHROPIC_MODEL, "max_tokens": 400, "temperature": 0, "system": system,
+        # No `temperature`: current Claude models reject it (HTTP 400). Output is validated instead.
+        json={"model": settings.ANTHROPIC_MODEL, "max_tokens": 1024, "system": system,
               "messages": [{"role": "user", "content": user_json}]},
         timeout=TIMEOUT_S)
     resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+    # The reply may start with a thinking block; use only the text blocks.
+    texts = [b["text"] for b in resp.json().get("content", []) if b.get("type") == "text"]
+    if not texts:
+        raise ValueError("no text in model reply")
+    return "".join(texts)
 
 
 def _parse(text: str) -> dict | None:
@@ -124,13 +129,18 @@ def explain(inp: dict) -> dict:
     start = time.monotonic()
     result = None
     if settings.ANTHROPIC_API_KEY:
-        try:
-            raw = call_model(SYSTEM_PROMPT, json.dumps(inp))
-            ok = validate_output(raw, inp)
-            if ok and time.monotonic() - start <= TIMEOUT_S:
-                result = dict(ok, source="ai", label=LABEL_AI)
-        except Exception:  # noqa: BLE001 - any failure falls back; never log details (may echo input)
-            result = None
+        # One retry if the first answer fails validation and there's time left for a second call.
+        for _attempt in range(2):
+            try:
+                raw = call_model(SYSTEM_PROMPT, json.dumps(inp))
+                ok = validate_output(raw, inp)
+                if ok and time.monotonic() - start <= TIMEOUT_S:
+                    result = dict(ok, source="ai", label=LABEL_AI)
+                    break
+            except Exception:  # noqa: BLE001 - any failure falls back; never log details (may echo input)
+                result = None
+            if time.monotonic() - start > TIMEOUT_S / 2:
+                break
     fallback = result is None
     if fallback:
         result = template_result(inp)
