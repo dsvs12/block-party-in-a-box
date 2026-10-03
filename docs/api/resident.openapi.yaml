@@ -642,7 +642,7 @@ components:
                 id: { $ref: '#/components/schemas/BlockIdValue' }
                 label: { type: string, example: 1100 S Cuyler Ave }
                 meters: { type: integer, example: 54 }
-        zip: { type: string, example: '60304' }
+        zip: { type: ['string', 'null'], example: '60304', description: 'Null until the block data has zip codes (backend-spec §5).' }
         tree_count: { type: integer, example: 55 }
         big_tree_count: { type: integer, example: 18 }
         parking:

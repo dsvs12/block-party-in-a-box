@@ -432,7 +432,7 @@ components:
       properties:
         match_id: { type: string, example: m_01J9Z7B3X1 }
         block_label: { type: string, example: 1100 S Cuyler Ave }
-        zip: { type: string, example: '60304' }
+        zip: { type: ['string', 'null'], example: '60304', description: 'Null until the block data has zip codes (backend-spec §5).' }
         date: { $ref: '#/components/schemas/LocalDate' }
         hours: { type: string, example: 9 a.m. – 11 p.m. }
         guests: { type: integer, example: 120 }

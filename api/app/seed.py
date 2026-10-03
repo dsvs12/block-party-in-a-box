@@ -106,7 +106,8 @@ def run() -> dict:
              "accepted_on_date": 0, "already_matched": False, "service_filled": False},
         ]
         whys = {m["vendor_account_id"]: m["why"]
-                for m in R.match({"date": "2027-06-19", "guests": 120, "zip": "60304"}, offers)}
+                for m in R.match({"date": "2027-06-19", "guests": 120,
+                                  "zip": (index.by_id.get("S CUYLER AVE|1100") or {}).get("zip")}, offers)}
         db.add(Match(id="m_r1_ice", request_id="r1", vendor_account_id="va_icecream", event_date="2027-06-19",
                      state="accepted", why=whys["va_icecream"], price_snapshot=300,
                      includes_snapshot="Soft serve and popsicles, up to 3 hours", service_snapshot="ice_cream",
