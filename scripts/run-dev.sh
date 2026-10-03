@@ -8,13 +8,15 @@ mkdir -p "$LOG_DIR"
 
 BACKEND_PID_FILE="$LOG_DIR/backend.pid"
 FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
+CONTAINER_ENGINE="${CONTAINER_ENGINE:-}"
+COMPOSE_CMD=()
 
 usage() {
   cat <<'EOF'
 Usage: scripts/run-dev.sh [backend|frontend|all|stop|status]
 
 Commands:
-  backend   Start only the FastAPI backend and Postgres database (Podman)
+  backend   Start only the FastAPI backend and Postgres database (Podman or Docker)
   frontend  Start only the Vite frontend
   all       Start backend + frontend together
   stop      Stop the running backend and frontend processes
@@ -25,6 +27,8 @@ Default behavior: all
 
 Examples:
   ./scripts/run-dev.sh all
+  CONTAINER_ENGINE=docker ./scripts/run-dev.sh all
+  CONTAINER_ENGINE=podman ./scripts/run-dev.sh all
   ./scripts/run-dev.sh backend
   ./scripts/run-dev.sh stop
 EOF
@@ -41,12 +45,52 @@ require_cmd() {
   fi
 }
 
-require_podman_compose() {
-  require_cmd podman
-  if ! podman compose version >/dev/null 2>&1; then
-    echo "Podman Compose is unavailable. Install a Compose provider (podman-compose or Docker Compose)." >&2
-    exit 1
-  fi
+require_container_compose() {
+  local requested="${CONTAINER_ENGINE:-auto}"
+
+  case "$requested" in
+    auto)
+      if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+        CONTAINER_ENGINE=podman
+        COMPOSE_CMD=(podman compose)
+      elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        CONTAINER_ENGINE=docker
+        COMPOSE_CMD=(docker compose)
+      else
+        echo "Neither Podman Compose nor Docker Compose is available." >&2
+        echo "Install Podman with a Compose provider or Docker with the Compose plugin." >&2
+        exit 1
+      fi
+      ;;
+    podman)
+      if ! command -v podman >/dev/null 2>&1 || ! podman compose version >/dev/null 2>&1; then
+        echo "Podman Compose is unavailable. Install Podman and a Compose provider." >&2
+        exit 1
+      fi
+      CONTAINER_ENGINE=podman
+      COMPOSE_CMD=(podman compose)
+      ;;
+    docker)
+      if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+        echo "Docker Compose is unavailable. Install Docker and the Compose plugin." >&2
+        exit 1
+      fi
+      CONTAINER_ENGINE=docker
+      COMPOSE_CMD=(docker compose)
+      ;;
+    *)
+      echo "Unsupported CONTAINER_ENGINE '$requested'. Use 'podman', 'docker', or 'auto'." >&2
+      exit 1
+      ;;
+  esac
+}
+
+run_compose() {
+  (cd "$API_DIR" && "${COMPOSE_CMD[@]}" "$@")
+}
+
+container_exec() {
+  "$CONTAINER_ENGINE" exec "$@"
 }
 
 require_supported_node() {
@@ -68,13 +112,13 @@ ensure_backend_env() {
 }
 
 start_backend() {
-  log "Starting PostgreSQL via Podman..."
-  (cd "$API_DIR" && podman compose up -d)
+  log "Starting PostgreSQL via $CONTAINER_ENGINE..."
+  run_compose up -d
 
   log "Waiting for PostgreSQL to become ready..."
   local database_ready=0
   for _ in $(seq 1 60); do
-    if podman exec partyinabox-db pg_isready -U party -d partyinabox >/dev/null 2>&1; then
+    if container_exec partyinabox-db pg_isready -U party -d partyinabox >/dev/null 2>&1; then
       database_ready=1
       break
     fi
@@ -83,8 +127,8 @@ start_backend() {
 
   if [[ "$database_ready" -ne 1 ]]; then
     echo "PostgreSQL did not become ready." >&2
-    (cd "$API_DIR" && podman compose ps) >&2 || true
-    (cd "$API_DIR" && podman compose logs db) >&2 || true
+    run_compose ps >&2 || true
+    run_compose logs db >&2 || true
     exit 1
   fi
   log "PostgreSQL is ready."
@@ -96,7 +140,7 @@ start_backend() {
   (cd "$API_DIR" && uv run alembic upgrade head >/dev/null)
 
   local user_count
-  user_count="$(podman exec partyinabox-db psql -U party -d partyinabox -tA -c 'SELECT COUNT(*) FROM users')"
+  user_count="$(container_exec partyinabox-db psql -U party -d partyinabox -tA -c 'SELECT COUNT(*) FROM users')"
   if [[ "$user_count" == "0" ]]; then
     log "Seeding the empty database with fictional demo data..."
     (cd "$API_DIR" && uv run python -m app.seed >/dev/null)
@@ -215,7 +259,7 @@ main() {
       exit 0
       ;;
     backend)
-      require_podman_compose
+      require_container_compose
       require_cmd curl
       require_cmd uv
       ensure_backend_env
@@ -228,7 +272,7 @@ main() {
       start_frontend
       ;;
     all)
-      require_podman_compose
+      require_container_compose
       require_cmd npm
       require_cmd curl
       require_cmd uv
@@ -238,6 +282,7 @@ main() {
       start_frontend
       echo
       echo "Full stack is running."
+      echo "  Database engine: $CONTAINER_ENGINE"
       echo "  API: http://localhost:8000/v1/health"
       echo "  Frontend: http://localhost:5173"
       ;;
