@@ -18,7 +18,8 @@ One site with three views (switch at the top of the page):
 
 - **Resident:** type an address to see whether the block can be closed, or the nearest block that
   can; pick a date range and see the petition due date and season checks; share a petition link and
-  watch neighbor signatures count toward the 10-address minimum; submit; track the request, ask to
+  neighbors open the link to sign (each address counts once) and watch the count toward the
+  10-address minimum; submit; track the request, ask to
   reschedule or cancel, and see which vendors are coming.
 - **Vendor:** set up a standing offer once (service, price, guests, days, area); approved parties
   that fit are matched automatically; accept or decline each job; message the organizer.
@@ -27,9 +28,9 @@ One site with three views (switch at the top of the page):
     with its reasons, suggestions such as "approve on the next Saturday instead", and a plain-language
     summary written by Claude from the computed scores.
   - **Requests:** the queue in first-come order, each request's petition count, weekend count
-    against the 30-event cap, impact score and reasons, then approve on a date or reject. Approve is
-    blocked, with the reason shown, when a rule isn't met.
-  - **Today:** the day's parties, their impact and the vendors serving them.
+    against the 30-event cap, impact score and reasons, then approve on any candidate date that
+    passes the rules, or reject. Blocked dates show why.
+  - **Today:** the day's parties on the map, their impact and the vendors serving them.
 
 The design spec for every screen is on the
 [Party in a Box Screens canvas](https://claude.ai/artifact/2hjuBS6ERgEmRog2DZoVsi).
@@ -114,6 +115,7 @@ For the project (see [`docs/backend-spec.md`](docs/backend-spec.md)):
   check service areas.
 - Host the API and connect the GitHub Pages site to it (the hosted page shows no data without one).
 - Real sign-in, email notifications and the 2027 rules once Public Works confirms them.
+- Remaining fixes are ranked in [`docs/issues.md`](docs/issues.md).
 
 ## Repo guide
 
@@ -122,6 +124,8 @@ For the project (see [`docs/backend-spec.md`](docs/backend-spec.md)):
 | `src/`, `web/` | React + Vite UI (`web/` is the GitHub Pages build) |
 | `api/` | FastAPI backend, Postgres schema migrations, rules engine, tests |
 | `docs/backend-spec.md`, `docs/api/` | Backend spec and OpenAPI contracts |
+| `docs/issues.md` | Stack-ranked open issues, with the model suited to fix each |
+| `brief.md`, `PROJECT.md` | Pitch write-ups |
 | `source-data/`, `scripts/` | Event data and the reference probe |
 | `HANDOFF.md`, `tasks/`, `AGENTS.md` | Build plan, team task files, rules for AI coding agents |
 
