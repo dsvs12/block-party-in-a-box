@@ -4,3 +4,8 @@ __pycache__/
 .env
 node_modules/
 tsconfig.tsbuildinfo
+api/dev.db
+api/test.db
+api/.venv/
+api/.env
+!api/.env.example
