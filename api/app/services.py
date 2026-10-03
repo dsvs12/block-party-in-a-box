@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import rules
@@ -74,25 +75,48 @@ def recount_signatures(db: Session, req: Request) -> dict:
 
 # --- caps ----------------------------------------------------------------------------------
 
-def weekend_approved_count(db: Session, weekend_key: str | None) -> int | None:
-    """Approved events on that weekend (live count from requests; WeekendSlot is the lock row)."""
+def approved_requests(db: Session) -> list[Request]:
+    """All approved/completed requests, loaded once so callers can pass them through."""
+    return db.query(Request).filter(Request.status.in_(CLOSURE_STATUSES)).all()
+
+
+def weekend_approved_count(db: Session, weekend_key: str | None, approved: list[Request] | None = None,
+                           exclude_id: str | None = None) -> int | None:
+    """Approved events on that weekend (live count from requests; WeekendSlot is the lock row).
+
+    `approved` is an optional preloaded list of closure requests; `exclude_id` skips one request
+    (a request being rescheduled already holds a slot)."""
     if weekend_key is None:
         return None
     n = 0
-    for r in db.query(Request).filter(Request.status.in_(CLOSURE_STATUSES)).all():
-        if r.approved_date and rules.weekend_key(r.approved_date) == weekend_key:
+    for r in (approved if approved is not None else approved_requests(db)):
+        if r.id != exclude_id and r.approved_date and rules.weekend_key(r.approved_date) == weekend_key:
             n += 1
     return n
 
 
 def lock_weekend(db: Session, weekend_key: str) -> WeekendSlot:
-    """Fetch-or-create the weekend lock row. On Postgres use SELECT ... FOR UPDATE."""
-    slot = db.get(WeekendSlot, weekend_key, with_for_update=True)
-    if slot is None:
+    """Fetch-or-create the weekend lock row. On Postgres: INSERT ... ON CONFLICT DO NOTHING, then
+    SELECT ... FOR UPDATE, so two first approvals on a fresh weekend can't race to a 500."""
+    dialect = db.get_bind().dialect.name
+    if dialect in ("postgresql", "sqlite"):
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        db.execute(insert(WeekendSlot).values(weekend_key=weekend_key, approved_count=0, version=1)
+                   .on_conflict_do_nothing(index_elements=["weekend_key"]))
+    slot = db.get(WeekendSlot, weekend_key, with_for_update=True, populate_existing=True)
+    if slot is None:  # other dialects
         slot = WeekendSlot(weekend_key=weekend_key, approved_count=0)
         db.add(slot)
         db.flush()
     return slot
+
+
+def lock_block_requests(db: Session, block_id: str) -> None:
+    """Row-lock every request on a block (spec §4.3 block-year lock). No-op on SQLite."""
+    db.query(Request).filter(Request.block_id == block_id).with_for_update().all()
 
 
 def block_year_count(db: Session, block_id: str, year: int, exclude_id: str | None = None) -> int:
@@ -108,8 +132,10 @@ def same_day_block_approved(db: Session, req: Request, date: str) -> bool:
                                     Request.approved_date == date).first() is not None
 
 
-def approval_check(db: Session, req: Request, date: str) -> dict:
-    """rules.can_approve with all inputs gathered from the DB."""
+def approval_check(db: Session, req: Request, date: str, exclude_self_from_weekend: bool = False) -> dict:
+    """rules.can_approve with all inputs gathered from the DB.
+
+    `exclude_self_from_weekend`: don't count this request in the weekend total (reschedules)."""
     pet = recount_signatures(db, req)
     return rules.can_approve(
         {"status": req.status, "date_start": req.date_start, "date_end": req.date_end,
@@ -117,18 +143,21 @@ def approval_check(db: Session, req: Request, date: str) -> dict:
         date,
         {"block": block_for(req), "rules": load_rules(), "distinct_count": pet["count"],
          "paper_attested": pet["paper_attested"],
-         "weekend_approved_count": weekend_approved_count(db, rules.weekend_key(date)),
+         "weekend_approved_count": weekend_approved_count(
+             db, rules.weekend_key(date), exclude_id=req.id if exclude_self_from_weekend else None),
          "block_year_count_excl": block_year_count(db, req.block_id, int(date[:4]), exclude_id=req.id),
          "same_day_block_approved": same_day_block_approved(db, req, date)})
 
 
 # --- traffic -------------------------------------------------------------------------------
 
-def closures_on_weekend(db: Session, date: str, exclude_id: str | None = None) -> list[Request]:
-    """Approved requests on the same weekend as `date` (or the same day, for weekdays)."""
+def closures_on_weekend(db: Session, date: str, exclude_id: str | None = None,
+                        approved: list[Request] | None = None) -> list[Request]:
+    """Approved requests on the same weekend as `date` (or the same day, for weekdays).
+    `approved` is an optional preloaded list of closure requests."""
     key = rules.weekend_key(date)
     out = []
-    for r in db.query(Request).filter(Request.status.in_(CLOSURE_STATUSES)).all():
+    for r in (approved if approved is not None else approved_requests(db)):
         if r.id == exclude_id or not r.approved_date:
             continue
         if (key and rules.weekend_key(r.approved_date) == key) or (not key and r.approved_date == date):
@@ -136,19 +165,26 @@ def closures_on_weekend(db: Session, date: str, exclude_id: str | None = None) -
     return out
 
 
-def score_request_on(db: Session, req: Request, date: str) -> dict:
-    """Traffic score for a request on a candidate date, against approved closures that weekend."""
+def score_request_on(db: Session, req: Request, date: str, approved: list[Request] | None = None,
+                     submitted: list[Request] | None = None) -> dict:
+    """Traffic score for a request on a candidate date, against approved closures that weekend.
+    `approved` / `submitted` are optional preloaded request lists (default: query)."""
     idx = get_index()
     near = {n["id"]: n for n in idx.neighbors(req.block_id)}
-    others = [near[r.block_id] for r in closures_on_weekend(db, date, exclude_id=req.id) if r.block_id in near]
-    pending = [{"label": block_label(r.block_id)} for r in db.query(Request).filter(
-        Request.status == "submitted", Request.id != req.id).all()
-        if r.block_id in near and date in rules.candidate_dates(r.date_start, r.date_end, load_rules())]
+    if approved is None:
+        approved = approved_requests(db)
+    if submitted is None:
+        submitted = db.query(Request).filter(Request.status == "submitted").all()
+    others = [near[r.block_id] for r in closures_on_weekend(db, date, exclude_id=req.id, approved=approved)
+              if r.block_id in near]
+    pending = [{"label": block_label(r.block_id)} for r in submitted
+               if r.id != req.id and r.block_id in near
+               and date in rules.candidate_dates(r.date_start, r.date_end, load_rules())]
     return rules.traffic_score(block_for(req), date, {
         "other_closures": [{"label": o["label"], "distance_m": o["distance_m"], "same_street": o["same_street"]}
                            for o in others],
         "pending_nearby": pending,
-        "weekend_approved_count": weekend_approved_count(db, rules.weekend_key(date)),
+        "weekend_approved_count": weekend_approved_count(db, rules.weekend_key(date), approved),
         "rules": load_rules()})
 
 
@@ -158,12 +194,18 @@ def _offer_inputs(db: Session, req: Request, date: str) -> list[dict]:
     out = []
     accepted_services = {m.service_snapshot for m in db.query(Match).filter(
         Match.request_id == req.id, Match.state == "accepted").all()}
-    for offer in db.query(Offer).all():
-        va = db.get(VendorAccount, offer.vendor_account_id)
-        accepted_on_date = db.query(Match).filter(
-            Match.vendor_account_id == va.id, Match.event_date == date, Match.state == "accepted").count()
-        existing = db.query(Match).filter(Match.request_id == req.id,
-                                          Match.vendor_account_id == va.id).first()
+    offers = db.query(Offer).all()
+    accounts = {va.id: va for va in db.query(VendorAccount).filter(
+        VendorAccount.id.in_([o.vendor_account_id for o in offers])).all()} if offers else {}
+    on_date = dict(db.query(Match.vendor_account_id, func.count(Match.id)).filter(
+        Match.event_date == date, Match.state == "accepted").group_by(Match.vendor_account_id).all())
+    existing_by_vendor: dict[str, Match] = {}
+    for m in db.query(Match).filter(Match.request_id == req.id).all():
+        existing_by_vendor.setdefault(m.vendor_account_id, m)
+    for offer in offers:
+        va = accounts[offer.vendor_account_id]
+        accepted_on_date = on_date.get(va.id, 0)
+        existing = existing_by_vendor.get(va.id)
         out.append({"vendor_account_id": va.id, "status": va.status, "active": offer.active,
                     "service": offer.service, "max_guests": offer.max_guests,
                     "jobs_per_day": offer.jobs_per_day, "days": offer.days, "zips": offer.zips,

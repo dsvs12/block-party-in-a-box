@@ -120,13 +120,17 @@ def list_requests(status: Literal["draft", "collecting", "submitted", "approved"
         rows = [r for r in rows if r.status == status]
     rows.sort(key=lambda r: (r.submitted_at is None, r.submitted_at.isoformat() if r.submitted_at else "", r.id))
     items = []
+    approved = services.approved_requests(db)  # loaded once, passed through to every row
+    submitted = [r for r in rows if r.status == "submitted"] if status in (None, "submitted") else \
+        db.query(Request).filter(Request.status == "submitted").all()
     for r in rows:
         level = None
         if r.status not in NO_LEVEL_STATUSES:
             cands = _candidates(r)
             if cands:
-                level = services.score_request_on(db, r, cands[0])["level"]
-        items.append({"id": r.id, "block_label": services.block_label(r.block_id),
+                level = services.score_request_on(db, r, cands[0], approved=approved,
+                                                  submitted=submitted)["level"]
+        items.append({"id": r.id, "block_id": r.block_id, "block_label": services.block_label(r.block_id),
                       "range_label": _range_label(r.date_start, r.date_end), "date_start": r.date_start,
                       "date_end": r.date_end, "status": r.status,
                       "distinct_count": services.recount_signatures(db, r)["count"],
@@ -159,10 +163,10 @@ def request_detail(request_id: str, db: Session = Depends(get_db), user: User = 
     focus = req.approved_date or (cands[0] if cands else req.date_start)
     focus_fixed = req.approved_date is not None
 
-    if req.status == "submitted" and cands:
-        can_approve = services.approval_check(db, req, cands[0])
-    else:
-        can_approve = {"ok": False, "reasons": ["Only submitted requests can be approved."]}
+    not_submitted = {"ok": False, "reasons": ["Only submitted requests can be approved."]}
+    gates = {d: (services.approval_check(db, req, d) if req.status == "submitted" else not_submitted)
+             for d in cands}
+    can_approve = gates[cands[0]] if cands else not_submitted
 
     older = []
     if req.submitted_at:
@@ -173,11 +177,12 @@ def request_detail(request_id: str, db: Session = Depends(get_db), user: User = 
     cap = cfg["max_events_per_weekend"]
 
     cand_out, scores = [], {}
+    approved_all = services.approved_requests(db)
     for d in cands:
         key = rules.weekend_key(d)
-        approved = services.weekend_approved_count(db, key) or 0
+        approved = services.weekend_approved_count(db, key, approved_all) or 0
         pending = sum(1 for r in others_pending if d in other_cands[r.id])
-        score = services.score_request_on(db, req, d)
+        score = services.score_request_on(db, req, d, approved=approved_all, submitted=others_pending)
         scores[d] = score
         competing = 0
         for r in older:
@@ -185,7 +190,8 @@ def request_detail(request_id: str, db: Session = Depends(get_db), user: User = 
             if keys == {key or d}:
                 competing += 1
         cand_out.append({"date": d, "weekend_approved": approved, "weekend_pending": pending, "cap": cap,
-                         "score": score, "older_pending_competing": (cap - approved) < competing})
+                         "score": score, "older_pending_competing": (cap - approved) < competing,
+                         "can_approve": gates[d]})
 
     if not focus_fixed and scores:  # impact map follows the candidate with the highest score
         focus = max(cands, key=lambda c: (scores[c]["score"], -cands.index(c)))
@@ -238,6 +244,7 @@ def approve(request_id: str, body: ApproveIn, if_match: str | None = Header(defa
     _parse_date(body.date)
     key = rules.weekend_key(body.date)
     slot = services.lock_weekend(db, key) if key else None
+    services.lock_block_requests(db, req.block_id)
     db.refresh(req)
     if not _version_matches(if_match, req):
         db.rollback()
@@ -271,8 +278,11 @@ def approve(request_id: str, body: ApproveIn, if_match: str | None = Header(defa
 
 
 @router.post("/village/requests/{request_id}/reject")
-def reject(request_id: str, body: RejectIn, db: Session = Depends(get_db), user: User = Reviewer):
+def reject(request_id: str, body: RejectIn, if_match: str | None = Header(default=None),
+           db: Session = Depends(get_db), user: User = Reviewer):
     req = services.get_request_or_404(db, request_id)
+    if not _version_matches(if_match, req):
+        raise ApiError(409, "stale_version", "This request changed. Reload and try again.")
     if req.status != "submitted":
         raise ApiError(409, "invalid_state", "Only submitted requests can be rejected.")
     before = {"status": req.status, "version": req.version}
@@ -289,17 +299,21 @@ def reject(request_id: str, body: RejectIn, db: Session = Depends(get_db), user:
 # --- change requests -----------------------------------------------------------------------
 
 @router.post("/village/change-requests/{change_id}/resolve")
-def resolve_change(change_id: str, body: ResolveIn, db: Session = Depends(get_db), user: User = Reviewer):
+def resolve_change(change_id: str, body: ResolveIn, if_match: str | None = Header(default=None),
+                   db: Session = Depends(get_db), user: User = Reviewer):
     cr = db.get(ChangeRequest, change_id)
     if cr is None:
         raise ApiError(404, "not_found", "Change request not found.")
     if cr.status != "open":
         raise ApiError(409, "already_resolved", "This change request is already resolved.")
     req = services.get_request_or_404(db, cr.request_id)
+    if not _version_matches(if_match, req):
+        raise ApiError(409, "stale_version", "This request changed. Reload and try again.")
     before = {"status": req.status, "approved_date": req.approved_date, "version": req.version}
 
     if body.decision == "decline":
         cr.status = "declined"
+        req.version += 1
     elif cr.type == "cancel":
         if req.status == "approved":
             _slot_adjust(db, req.approved_date, -1)
@@ -321,9 +335,11 @@ def resolve_change(change_id: str, body: ResolveIn, db: Session = Depends(get_db
         new_key, old_key = rules.weekend_key(body.new_date), rules.weekend_key(old_date)
         for k in sorted({k for k in (new_key, old_key) if k}):
             services.lock_weekend(db, k)
+        services.lock_block_requests(db, req.block_id)
+        db.refresh(req)
         req.status = "submitted"  # approval_check treats this as a fresh request; restored below
-        try:
-            check = services.approval_check(db, req, body.new_date)
+        try:  # the request already holds a slot, so it must not count against its own weekend
+            check = services.approval_check(db, req, body.new_date, exclude_self_from_weekend=True)
         finally:
             req.status = "approved"
         reasons = [r for r in check["reasons"] if r != "That date is outside the requested range."]
@@ -396,7 +412,9 @@ def village_day(date: str | None = None, db: Session = Depends(get_db), user: Us
             vendor_names.add(va.id)
         by_level[score["level"]] += 1
         stops += len(services.block_for(r).get("bus_stop_list", []))
-        parties.append({"request_id": r.id, "block_label": services.block_label(r.block_id), "guests": r.guests,
+        blk = services.block_for(r)
+        parties.append({"request_id": r.id, "block_id": r.block_id, "centroid": blk["centroid"],
+                        "lines": blk["lines"], "block_label": services.block_label(r.block_id), "guests": r.guests,
                         "level": score["level"], "why": " · ".join(x["text"] for x in score["reasons"]),
                         "barricade_date": _barricade(d), "vendors": names})
     return {"date": d, "parties": parties,
@@ -438,7 +456,8 @@ def whatif(body: WhatIfIn, db: Session = Depends(get_db), user: User = Reviewer)
             "other_closures": [{"label": o["label"], "distance_m": o["distance_m"],
                                 "same_street": o["same_street"]} for o in others],
             "pending_nearby": [], "weekend_approved_count": wc, "rules": cfg})
-        per_block.append({"block_id": b["id"], "block_label": idx.label(b), "score": score})
+        per_block.append({"block_id": b["id"], "block_label": idx.label(b), "centroid": b["centroid"],
+                          "lines": b["lines"], "score": score})
         key = rules.weekend_key(body.date) or body.date
         alts = []
         for off in range(-14, 15):
