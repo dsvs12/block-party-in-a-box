@@ -35,6 +35,13 @@ Opus = large, cross-cutting or security-sensitive.
 | 23 | P3 | `App.tsx` is one 466-line file of one-line components | `src/App.tsx` | Mechanical split into `routes/{resident,vendor,village}` + `components/` | L | Sonnet | no |
 | 24 | P3 | GET endpoints write to the database (signature recount, lazy thread creation) | `village.py:228`, `resident.py:119,127` | Recount on write paths; create threads on submit only | S | Sonnet | no |
 
+## Status (updated 2026-10-03)
+
+**Fixed and pushed:** 1, 4, 11, 18 (`1050380`) · 3 (`649c0f2`) · 2 (`b2610de`) · 10, 12 (`817b440`) ·
+5, 9, 13, 14, 15, 17, 20 (`652af48` API, `7cb825c` UI).
+
+**Open:** 6, 7, 8 (need decisions, then Opus/Sonnet), 16, 19, 21, 22, 23, 24.
+
 ## Fix today before the demo
 
 1. **In parallel (no shared files):**
