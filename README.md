@@ -66,14 +66,31 @@ vulnerability.
 - Publish approved block events and weekend counts against the 30 cap as open data.
 - Tell us whether VillageView (the Village's online permit system) has an API.
 
-## Run it locally
+## Run the demo locally
+
+Needs Docker, [uv](https://docs.astral.sh/uv/) and Node 20+. The UI talks to the FastAPI backend in
+[`api/`](api/README.md), which runs on Postgres with fictional sample data.
 
 ```sh
-python3 scripts/prep_blocks.py        # rebuild web/data/blocks.json
-python3 -m http.server -d web 8000    # open http://localhost:8000
+# 1. API + database (first terminal)
+cd api
+docker compose up -d                      # Postgres 16 on localhost:5433
+cp -n .env.example .env                   # optional: paste ANTHROPIC_API_KEY for live AI summaries
+uv sync && uv run alembic upgrade head
+uv run python -m app.seed                 # sample requests, vendors, petitions (re-run to reset)
+uv run uvicorn app.main:app --port 8000   # API docs at http://localhost:8000/docs
+
+# 2. UI (second terminal, repo root)
+npm install
+npm run dev                               # open http://localhost:5173
 ```
 
-Every push to `main` deploys `web/` to GitHub Pages.
+Sign-in is mocked: the UI sends a dev token per role (`dev-resident-a`, `dev-vendor-icecream`,
+`dev-reviewer`); change them in `.env.development` to view as another sample user. Without an
+Anthropic key the Traffic planner shows a labelled templated summary instead of an AI-written one.
+
+Tests: `cd api && uv run pytest -q`. Every push to `main` deploys `web/` to GitHub Pages, but the
+hosted page needs a hosted API (`VITE_API_BASE`) to show data.
 
 ---
 
