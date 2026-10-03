@@ -63,3 +63,8 @@ table.signers { margin-top: 8px; font-size: 11px; }
 .messages li { padding: 6px 0; border-bottom: 1px solid #e8ede9; }
 .messages p { margin: 2px 0 0; }
 .page-intro .date-pick { margin-top: 0; }
+
+/* Public petition signing */
+.sign-form { display: grid; gap: 10px; max-width: 420px; margin-top: 14px; }
+.sign-form label:not(.service-check) { display: grid; gap: 4px; font-weight: 700; font-size: 11px; }
+.sign-form input[type=text], .sign-form input:not([type]) { width: 100%; font-weight: 400; }

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CircleMarker, MapContainer, Polyline, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { apiConfigured, residentApi, vendorApi, villageApi, type AiExplainInput, type AiExplainOutput, type ChangeRequestInput, type DateChecks, type LocalDate, type Reason, type ThreadMessages } from './api';
+import { DemoBanner } from './DemoBanner';
+import { PetitionSign } from './PetitionSign';
 
 type Role = 'resident' | 'vendor' | 'village';
 type RecordValue = Record<string, unknown>;
@@ -74,7 +76,6 @@ function Header({ role, route, go }: { role: Role; route: string; go: (route: st
   return <header className="main-header"><div className="wide header-inner"><button className="brand" onClick={() => go(nav[0][1])} aria-label="Party in a Box home"><span><b>Party in a Box</b><small>Oak Park block parties</small></span></button><nav aria-label={`${titleCase(role)} navigation`}>{nav.map(([label, target, smart]) => <button className={`${route === target ? 'active' : ''} ${smart ? 'smart-tab' : ''}`} key={target} onClick={() => go(target)}>{smart && <span aria-hidden="true">✦</span>}{label}</button>)}</nav><button className="logout" title="Sign-out is provided by the connected identity service" onClick={() => go('/resident/info')}>Sign out</button></div></header>;
 }
 
-function DemoBanner() { return <div className="demo-banner"><b>Demo only:</b>&nbsp; sample data; please don't enter real personal information.</div>; }
 
 function Footer() { return <footer className="wide">Not an official Village of Oak Park product. Rules shown are 2026; confirm 2027 with Public Works.</footer>; }
 function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) { return <section className={`card ${className}`}>{children}</section>; }
@@ -113,7 +114,7 @@ function ThreadPanel({ threadId, load, send }: { threadId: string; load: Message
   </div>;
 }
 
-function Resident({ route, go }: { route: string; go: (route: string) => void }) { if (route === '/resident/new') return <NewEvent go={go} />; if (route.startsWith('/resident/petition/')) return <Petition id={route.split('/').pop()!} go={go} />; if (route === '/resident/events') return <MyEvents go={go} />; return <ResidentInfo go={go} />; }
+function Resident({ route, go }: { route: string; go: (route: string) => void }) { if (route.startsWith('/petition/')) return <PetitionSign token={decodeURIComponent(route.slice('/petition/'.length).split(/[/?]/)[0])} />; if (route === '/resident/new') return <NewEvent go={go} />; if (route.startsWith('/resident/petition/')) return <Petition id={route.split('/').pop()!} go={go} />; if (route === '/resident/events') return <MyEvents go={go} />; return <ResidentInfo go={go} />; }
 
 function ResidentInfo({ go }: { go: (route: string) => void }) {
   const rules = useApi(() => residentApi.getRules(2027), []);

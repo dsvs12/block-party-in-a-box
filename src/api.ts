@@ -113,6 +113,12 @@ export type AiExplainInput = {
 export type AiExplainOutput = { summary: string; answer: string; referenced_suggestions: number[]; source: 'ai' | 'template'; label: string };
 
 /** Resident calls defined in docs/api/resident.openapi.yaml. Browser-only client; not a backend. */
+export type PublicPetition = { block_label: string; date_start: string; date_end: string; hours: string; barricades: boolean; organizer_display_name: string; distinct_count: number; needed: number; open: boolean };
+
+export const publicApi = {
+  getPetition: (token: string) => request<PublicPetition>(`/petitions/${encodeURIComponent(token)}`)
+};
+
 export const residentApi = {
   getRules: (year = 2027) => request<unknown>(`/rules?year=${year}`),
   lookupBlock: (address: string) => request<unknown>(endpoint.lookup(address)),
