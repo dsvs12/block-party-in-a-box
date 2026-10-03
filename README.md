@@ -36,8 +36,8 @@ The design spec for every screen is on the
 
 ### Run it locally
 
-Needs Docker, [uv](https://docs.astral.sh/uv/) and Node 20+. The UI talks to the FastAPI backend in
-[`api/`](api/README.md), which runs on Postgres with fictional sample data.
+Needs Docker, [uv](https://docs.astral.sh/uv/) and Node 20.19+ (or 22.12+). The UI talks to
+the FastAPI backend in [`api/`](api/README.md), which runs on Postgres with fictional sample data.
 
 ```sh
 # 1. API + database (first terminal)
