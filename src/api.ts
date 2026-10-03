@@ -31,7 +31,16 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {})
     }
   });
-  if (!response.ok) throw new Error(`API request failed: ${response.status}`);
+  if (!response.ok) {
+    const fallback = `Request failed (${response.status})`;
+    try {
+      const error = await response.json() as { message?: string; reasons?: string[] };
+      throw new Error([error.message, ...(error.reasons ?? [])].filter(Boolean).join(' ') || fallback);
+    } catch (error) {
+      if (error instanceof Error && error.message !== fallback) throw error;
+      throw new Error(fallback);
+    }
+  }
   return response.json() as Promise<T>;
 }
 
@@ -69,6 +78,20 @@ export const residentApi = {
   signPetition: (token: string, input: { name: string; house_number: string; email?: string; consent: true; captcha: string }) => post<{ state: SignatureState; distinct_count: number; needed: number }>(`/petitions/${token}/signatures`, input),
   submitRequest: (requestId: string) => post<unknown>(`/requests/${requestId}/submit`),
   myRequests: () => request<unknown>('/me/requests')
+};
+
+export const vendorApi = {
+  me: () => request<unknown>('/vendor/me'),
+  offer: () => request<unknown>('/vendor/offer'),
+  summary: () => request<unknown>('/vendor/summary'),
+  matches: () => request<unknown>('/vendor/matches?state=proposed'),
+  jobs: () => request<unknown>('/vendor/jobs')
+};
+
+export const villageApi = {
+  requests: () => request<unknown>('/village/requests?sort=submitted_at'),
+  today: (date: LocalDate) => request<unknown>(`/village/day?date=${date}`),
+  whatIf: (date: LocalDate, closures: string[], treatAsWeekday = false) => post<unknown>('/village/whatif', { date, closures, treat_as_weekday: treatAsWeekday })
 };
 
 export const apiConfigured = Boolean(apiBase);
