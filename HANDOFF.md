@@ -20,7 +20,7 @@ cap in front of them.
 
 **Users (three views):** Resident organizer · Vendor · Village official/reviewer (Public Works).
 
-**Verified findings (`scripts/probe_reference.py` reproduces the first four):**
+**Verified findings (`scripts/probe_reference.py` reproduces the 887 / 342 / 441 counts and the shade list):**
 - 887 residential street+hundred segments with address ranges.
 - 342 segments are on east/west streets, which the Village doesn't close for block parties; 222 of
   those are residential. **Say "segments," never "39% of Oak Park."**
