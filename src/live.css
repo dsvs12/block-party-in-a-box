@@ -68,3 +68,6 @@ table.signers { margin-top: 8px; font-size: 11px; }
 .sign-form { display: grid; gap: 10px; max-width: 420px; margin-top: 14px; }
 .sign-form label:not(.service-check) { display: grid; gap: 4px; font-weight: 700; font-size: 11px; }
 .sign-form input[type=text], .sign-form input:not([type]) { width: 100%; font-weight: 400; }
+.chip.blocked { border-style: dashed; color: #8a5a1b; background: #fbf5ea; }
+.chip.blocked small { color: #8a5a1b; }
+.chip.blocked.active { background: #1d725a; color: #fff; }

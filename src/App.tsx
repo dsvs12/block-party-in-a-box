@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { CircleMarker, MapContainer, Polyline, TileLayer } from 'react-leaflet';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { apiConfigured, residentApi, vendorApi, villageApi, type AiExplainInput, type AiExplainOutput, type ChangeRequestInput, type DateChecks, type LocalDate, type Reason, type ThreadMessages } from './api';
 import { DemoBanner } from './DemoBanner';
@@ -85,10 +85,31 @@ function Status({ value }: { value: unknown }) { const status = typeof value ===
 function LoadingCard({ label = 'Loading…' }: { label?: string }) { return <Card className="loading-card"><span className="spinner" />{label}</Card>; }
 function ApiError({ message }: { message: string }) { return <Card className="api-error"><h2>We couldn’t load this data</h2><p>{message}</p>{!apiConfigured && <p className="muted">Set <code>VITE_API_BASE</code> to the Party in a Box API URL, then reload. No sample records are shown.</p>}</Card>; }
 
-function RealMap({ block, height = 270 }: { block?: RecordValue; height?: number }) {
+const levelColor: Record<string, string> = { low: '#1E6A4C', medium: '#C27C0E', high: '#A3341B' };
+type MapClosure = { key: string; label: string; level: string; score?: string; centroid: [number, number] | null; lines: [number, number][][] };
+function toMapClosures(items: RecordValue[], withScore: boolean): MapClosure[] {
+  return items.map((item, index) => {
+    const score = asRecord(item.score);
+    const level = text(withScore ? score.level : item.level, 'low');
+    const c = Array.isArray(item.centroid) && item.centroid.length === 2 ? item.centroid as [number, number] : null;
+    const lines = Array.isArray(item.lines) ? (item.lines as [number, number][][]).filter((line) => Array.isArray(line) && line.length > 1) : [];
+    return { key: `${text(item.block_id, '')}-${index}`, label: text(item.block_label, ''), level, score: withScore ? text(score.score, '') : undefined, centroid: c, lines };
+  }).filter((item) => item.centroid || item.lines.length);
+}
+function FitBounds({ closures }: { closures: MapClosure[] }) {
+  const map = useMap();
+  const points = closures.flatMap((item) => [...item.lines.flat(), ...(item.centroid ? [item.centroid] : [])]);
+  const signature = JSON.stringify(points);
+  useEffect(() => {
+    const pts = JSON.parse(signature) as [number, number][];
+    if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
+  }, [map, signature]);
+  return null;
+}
+function RealMap({ block, height = 270, closures }: { block?: RecordValue; height?: number; closures?: MapClosure[] }) {
   const centroid = Array.isArray(block?.centroid) && block?.centroid.length === 2 ? block.centroid as [number, number] : oakParkCenter;
   const lines = Array.isArray(block?.lines) ? block.lines as [number, number][][] : [];
-  return <div className="real-map" style={{ height }}><MapContainer center={centroid} zoom={block ? 16 : 14} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}><TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />{lines.map((line, index) => <Polyline key={index} positions={line} pathOptions={{ color: '#1b745b', weight: 6 }} />)}<CircleMarker center={centroid} radius={8} pathOptions={{ color: '#fff', fillColor: '#1b745b', fillOpacity: 1, weight: 3 }} /></MapContainer></div>;
+  return <div className="real-map" style={{ height }}><MapContainer center={centroid} zoom={block ? 16 : 14} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}><TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />{lines.map((line, index) => <Polyline key={index} positions={line} pathOptions={{ color: '#1b745b', weight: 6 }} />)}{!closures && <CircleMarker center={centroid} radius={8} pathOptions={{ color: '#fff', fillColor: '#1b745b', fillOpacity: 1, weight: 3 }} />}{closures && <FitBounds closures={closures} />}{closures?.map((item) => { const color = levelColor[item.level] ?? levelColor.low; return <Fragment key={item.key}>{item.lines.map((line, index) => <Polyline key={index} positions={line} pathOptions={{ color, weight: 6 }} />)}{item.centroid && <CircleMarker center={item.centroid} radius={8} pathOptions={{ color: '#fff', fillColor: color, fillOpacity: 1, weight: 3 }}><Tooltip>{item.label} · {item.level}{item.score !== undefined ? ` ${item.score}` : ''}</Tooltip></CircleMarker>}</Fragment>; })}</MapContainer></div>;
 }
 
 
@@ -360,7 +381,7 @@ function RequestDetail({ id, onChanged }: { id: string; onChanged: () => void })
   const candidates = records(d.candidates);
   const chosen = picked || text(candidates[0]?.date, '');
   const chosenCandidate = candidates.find((candidate) => text(candidate.date, '') === chosen);
-  const gate = asRecord(d.can_approve);
+  const gate = asRecord(chosenCandidate?.can_approve);
   const canApprove = gate.ok === true;
   const status = text(d.status, '');
   const threadId = text(d.thread_id, '');
@@ -370,13 +391,14 @@ function RequestDetail({ id, onChanged }: { id: string; onChanged: () => void })
   const reject = async () => { const result = await decision.run(() => villageApi.reject(id, reason.trim()), 'Request rejected.'); if (result.ok) { setRejecting(false); setReason(''); after(); } };
   return <Card className="request-detail"><small>REQUEST {id.toUpperCase()}</small><div className="card-title"><h2>{text(d.block_label)}</h2><Status value={status} /></div><p>{dateText(d.date_start)} – {dateText(d.date_end)} · {text(d.guests)} guests · Organizer {text(d.organizer_display_name)}</p>{d.approved_date ? <p>Approved date: <b>{dateText(d.approved_date)}</b></p> : null}
     <div className="detail-stats"><span>Petition {text(d.distinct_count)}/{text(d.needed, '10')} addresses</span><span>Version {text(d.version)}</span><span>Submitted {when(d.submitted_at)}</span></div>
-    {status === 'submitted' && (canApprove ? <p className="success-text">Ready to approve: all gates pass.</p> : <div className="gate-note"><b>Can’t approve yet</b><ul>{list(gate.reasons).map((item) => <li key={item}>{item}</li>)}</ul></div>)}
+    {status === 'submitted' && chosenCandidate && canApprove && <p className="success-text">Ready to approve {dateText(chosen)}: all gates pass.</p>}
     <h3>Candidate dates</h3>
-    <div className="chip-row">{candidates.map((candidate) => { const score = asRecord(candidate.score); const date = text(candidate.date, ''); return <button key={date} className={`chip ${chosen === date ? 'active' : ''}`} aria-pressed={chosen === date} onClick={() => setPicked(date)}><b>{dateText(date)}</b><small>Weekend {text(candidate.weekend_approved)}/{text(candidate.cap)} · {text(score.level)} {text(score.score)}</small></button>; })}</div>
+    <div className="chip-row">{candidates.map((candidate) => { const score = asRecord(candidate.score); const date = text(candidate.date, ''); const blocked = asRecord(candidate.can_approve).ok !== true; const why = list(asRecord(candidate.can_approve).reasons)[0]; return <button key={date} className={`chip ${chosen === date ? 'active' : ''}${blocked ? ' blocked' : ''}`} title={blocked ? `Blocked: ${why ?? 'cannot be approved'}` : undefined} aria-pressed={chosen === date} onClick={() => setPicked(date)}><b>{dateText(date)}</b><small>Weekend {text(candidate.weekend_approved)}/{text(candidate.cap)} · {text(score.level)} {text(score.score)}</small></button>; })}</div>
     {chosenCandidate && <><h3>Why {dateText(chosen)} scores {text(asRecord(chosenCandidate.score).score)}</h3><ReasonList reasons={reasonsOf(asRecord(chosenCandidate.score).reasons)} />{chosenCandidate.older_pending_competing === true && <p className="muted">An older pending request is competing for this weekend.</p>}</>}
     <h3>Vendors</h3>{records(d.vendors).length ? records(d.vendors).map((vendor) => <div className="vendor-preview" key={text(vendor.name)}><b>{text(vendor.name)}</b> · {text(vendor.service)} · ${text(vendor.price_usd)} <small>{text(vendor.state)}</small></div>) : <p className="muted">No vendors listed.</p>}
     {changes.length > 0 && <><h3>Change requests</h3>{changes.map((change) => <ChangeRow key={text(change.id)} change={change} onResolved={after} />)}</>}
     {status === 'submitted' && <div className="button-row card-actions"><Button variant="danger" onClick={() => { decision.reset(); setRejecting(!rejecting); }} disabled={decision.busy}>Reject</Button><Button onClick={approve} disabled={decision.busy || !canApprove || !chosen}>{decision.busy ? 'Working…' : `Approve ${chosen ? dateText(chosen) : ''}`}</Button></div>}
+    {status === 'submitted' && chosenCandidate && !canApprove && <div className="gate-note"><b>Can’t approve {dateText(chosen)}</b><ul>{list(gate.reasons).map((item) => <li key={item}>{item}</li>)}</ul></div>}
     {rejecting && <div className="inline-form"><label>Reason shown to the organizer<textarea value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} /></label><div className="button-row"><Button variant="quiet" onClick={() => setRejecting(false)}>Never mind</Button><Button variant="danger" onClick={reject} disabled={decision.busy || !reason.trim()}>Confirm reject</Button></div></div>}
     <ActionNote error={decision.error} done={decision.done} />
     {threadId && <div className="thread"><Button variant="secondary" onClick={() => setMessages(!messages)}>{messages ? 'Hide messages' : 'Messages with organizer'}</Button>{messages && <ThreadPanel threadId={threadId} load={villageApi.messages} send={villageApi.sendMessage} />}</div>}
@@ -399,7 +421,7 @@ function Today() {
   const [date, setDate] = useState('2027-06-19');
   const state = useApi(() => villageApi.today(date), [date]);
   const payload = asRecord(state.data); const parties = records(payload.parties); const totals = asRecord(payload.totals); const byLevel = asRecord(totals.by_level);
-  return <div className="wide today"><PageIntro title="Today" text="Approved parties and their rule-based traffic impact." action={<label className="date-pick">Date<input type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} /></label>} /><RealMap height={340} />{state.loading ? <LoadingCard label="Loading today’s closures…" /> : state.error ? <ApiError message={state.error} /> : <><div className="today-stats"><Card><b>Block parties today</b><strong>{text(totals.count, '0')}</strong></Card><Card><b>Traffic impact</b><strong>{['low', 'medium', 'high'].map((level) => `${titleCase(level)} ${text(byLevel[level], '0')}`).join(' · ')}</strong></Card><Card><b>Bus stops on closed blocks</b><strong>{text(totals.bus_stops_closed, '0')}</strong></Card><Card><b>Vendors serving today</b><strong>{text(totals.vendors, '0')}</strong></Card></div><div className="today-list">{parties.length ? parties.map((party) => <Card key={text(party.request_id, text(party.block_label))}><div><h3>{text(party.block_label)}</h3><p>{text(party.hours, '9 a.m. – 11 p.m.')} · {text(party.guests)} guests <Status value={party.level} /></p><p>{text(party.why, '')}</p><p className="muted">Vendors: {list(party.vendors).join(', ') || 'none matched'}{party.barricade_date ? ` · Barricades ${dateText(party.barricade_date)}` : ''}</p></div></Card>) : <Card><p>No block parties on this date.</p></Card>}</div></>}</div>;
+  return <div className="wide today"><PageIntro title="Today" text="Approved parties and their rule-based traffic impact." action={<label className="date-pick">Date<input type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} /></label>} /><RealMap height={340} closures={toMapClosures(parties, false)} />{state.loading ? <LoadingCard label="Loading today’s closures…" /> : state.error ? <ApiError message={state.error} /> : <><div className="today-stats"><Card><b>Block parties today</b><strong>{text(totals.count, '0')}</strong></Card><Card><b>Traffic impact</b><strong>{['low', 'medium', 'high'].map((level) => `${titleCase(level)} ${text(byLevel[level], '0')}`).join(' · ')}</strong></Card><Card><b>Bus stops on closed blocks</b><strong>{text(totals.bus_stops_closed, '0')}</strong></Card><Card><b>Vendors serving today</b><strong>{text(totals.vendors, '0')}</strong></Card></div><div className="today-list">{parties.length ? parties.map((party) => <Card key={text(party.request_id, text(party.block_label))}><div><h3>{text(party.block_label)}</h3><p>{text(party.hours, '9 a.m. – 11 p.m.')} · {text(party.guests)} guests <Status value={party.level} /></p><p>{text(party.why, '')}</p><p className="muted">Vendors: {list(party.vendors).join(', ') || 'none matched'}{party.barricade_date ? ` · Barricades ${dateText(party.barricade_date)}` : ''}</p></div></Card>) : <Card><p>No block parties on this date.</p></Card>}</div></>}</div>;
 }
 
 type Closure = { block_id: string; block_label: string };
@@ -415,10 +437,8 @@ function Planner() {
   const ask = useAction();
   const blocks = useApi(async () => {
     const queue = await villageApi.requests();
-    const ids = records(queue.requests).filter((item) => !['rejected', 'withdrawn', 'cancelled'].includes(text(item.status, ''))).map((item) => text(item.id, ''));
-    const details = await Promise.all(ids.map(async (id) => asRecord(await villageApi.request(id))));
     const seen = new Map<string, string>();
-    details.forEach((d) => { const blockId = text(d.block_id, ''); if (blockId && !seen.has(blockId)) seen.set(blockId, text(d.block_label, blockId)); });
+    records(queue.requests).filter((item) => !['rejected', 'withdrawn', 'cancelled'].includes(text(item.status, ''))).forEach((item) => { const blockId = text(item.block_id, ''); if (blockId && !seen.has(blockId)) seen.set(blockId, text(item.block_label, blockId)); });
     return [...seen].map(([block_id, block_label]): Closure => ({ block_id, block_label }));
   }, []);
 
@@ -462,7 +482,7 @@ function Planner() {
       {tips.length > 0 && <><h3>Tips</h3><ul className="score-list">{tips.map((tip) => <li key={tip}>{tip}</li>)}</ul></>}
       <ActionNote error={ask.error} />
       {ai && <div className="ai-answer"><span className={`badge ai-label ${ai.source}`}>{ai.label}</span><p><b>Summary.</b> {ai.summary}</p><p><b>Answer.</b> {ai.answer}</p></div>}
-    </> : running ? <p className="muted">Running scenario…</p> : <p className="muted">Run a scenario to see a backend-calculated result.</p>}</Card><Card className="planner-map"><h2>Map</h2><RealMap height={330} /><p className="legend">Uses OpenStreetMap. Closure geometry is drawn from the backend once a scenario returns it.</p></Card></div></div>;
+    </> : running ? <p className="muted">Running scenario…</p> : <p className="muted">Run a scenario to see a backend-calculated result.</p>}</Card><Card className="planner-map"><h2>Map</h2><RealMap height={330} closures={toMapClosures(perBlock, true)} /><p className="legend">Uses OpenStreetMap. Closure geometry is drawn from the backend once a scenario returns it.</p></Card></div></div>;
 }
 
 export default App;
